@@ -1,0 +1,4 @@
+# Test-only dependencies. Not needed to use the blueprint.
+# Each harness release pins one Home Assistant version (0.13.375 -> 2026.10.4)
+# and requires Python >= 3.14.
+pytest-homeassistant-custom-component==0.13.375

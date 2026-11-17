@@ -1,0 +1,522 @@
+blueprint:
+  name: Zone-Aware Lighting
+  description: >-
+    **Version: 0.1.0 (experimental)**
+
+
+    Occupancy-driven lighting for one controlled lighting area.
+
+
+    **Basic use:** select one or more Motion/Occupancy sensors and the lights
+    for this area. Lights turn on when any Occupancy Sensor detects someone and
+    turn off after all sensors have explicitly reported clear for the vacancy
+    timeout. This is the same as conventional motion-activated lighting.
+
+
+    **Optional features (all additive):** illuminance-based activation
+    permission, Additional Retention Sensors that may keep an established
+    occupancy session alive but never turn lights on, edge-triggered
+    Preactivation Sensors (adjacent motion, doors, openings) that provisionally
+    light the area until an Occupancy Sensor confirms, native activation
+    conditions, and an alternate lighting target selected by native conditions.
+
+
+    **Safety rules:** `unknown`/`unavailable` sensors never count as clear.
+    Sensor states are rechecked immediately before every automatic turn-off.
+    If occupancy returns while shutdown is in flight, affected lighting is
+    restored as part of the same session, without reevaluating activation
+    permission or target selection.
+    Failed preactivation only withdraws lights that it turned on itself.
+    Illuminance never turns lights off.
+
+
+    **Session state:** Each occupancy session is held by a single automation
+    run. Restarting Home Assistant or reloading this automation ends that run
+    without turning anything off. Lights stay as they are until the next
+    occupancy session ends in confirmed vacancy.
+  domain: automation
+  source_url: https://github.com/jd-hicks/zone-aware-lighting/blob/main/zone_aware_lighting.yaml
+  homeassistant:
+    # The run-level state machine updates loop variables from nested blocks,
+    # which requires the 2025.4 `variables` scoping behavior.
+    min_version: "2025.4.0"
+  input:
+    occupancy_section:
+      name: "Basic: Occupancy"
+      icon: mdi:motion-sensor
+      input:
+        occupancy_sensors:
+          name: Occupancy Sensors
+          description: >-
+            Trusted Motion/Occupancy sensors inside this area. Any one turning
+            on establishes occupancy and may turn the lights on. All of them
+            must explicitly report clear before the area can become vacant.
+          selector:
+            entity:
+              multiple: true
+              filter:
+                - domain: binary_sensor
+                  device_class: motion
+                - domain: binary_sensor
+                  device_class: occupancy
+        vacancy_timeout:
+          name: Vacancy Timeout
+          description: >-
+            How long every Occupancy and Additional Retention Sensor must
+            continuously and explicitly report clear before the area is
+            considered vacant and its automatic lighting is withdrawn.
+          default: 180
+          selector:
+            number:
+              min: 0
+              max: 86400
+              step: 1
+              mode: box
+              unit_of_measurement: seconds
+
+    lighting_section:
+      name: "Basic: Lighting"
+      icon: mdi:lightbulb-outline
+      input:
+        default_target:
+          name: Default Target
+          description: Lights owned by this area's automation.
+          selector:
+            entity:
+              multiple: true
+              filter:
+                - domain: light
+
+    ambient_light_section:
+      name: "Optional: Ambient Light"
+      icon: mdi:brightness-6
+      collapsed: true
+      input:
+        illuminance_sensors:
+          name: Illuminance Sensors
+          description: >-
+            Optional. Only checked when lights would be turned on
+            automatically. Readings that are not valid numbers are ignored. If
+            no sensor has a valid reading, activation is allowed.
+          default: []
+          selector:
+            entity:
+              multiple: true
+              filter:
+                - domain: sensor
+                  device_class: illuminance
+        illuminance_aggregation:
+          name: Illuminance Aggregation
+          description: >-
+            How multiple valid readings are combined into one effective
+            illuminance value.
+          default: average
+          selector:
+            select:
+              mode: dropdown
+              options:
+                - label: Minimum (activate if any measured part is dark)
+                  value: minimum
+                - label: Maximum (inhibit if any measured part is bright)
+                  value: maximum
+                - label: Average
+                  value: average
+                - label: Median (reduce outlier influence)
+                  value: median
+        illuminance_threshold:
+          name: Illuminance Threshold
+          description: >-
+            Automatic activation is inhibited when effective illuminance is
+            greater than or equal to this value. It is permitted when below.
+          default: 100
+          selector:
+            number:
+              min: 0
+              max: 100000
+              step: 1
+              mode: box
+              unit_of_measurement: lx
+
+    extended_detection_section:
+      name: "Advanced: Extended Detection"
+      icon: mdi:radar
+      collapsed: true
+      input:
+        preactivation_sensors:
+          name: Preactivation Sensors
+          description: >-
+            Optional. Local transition sensors just outside this area (for
+            example a vestibule PIR, a boundary PIR, or a door). Only an
+            off -> on transition counts. A sensor staying on never keeps the
+            area occupied. Lights turned on this way are withdrawn after the
+            confirmation timeout unless an Occupancy Sensor confirms.
+          default: []
+          selector:
+            entity:
+              multiple: true
+              filter:
+                - domain: binary_sensor
+                  device_class: motion
+                - domain: binary_sensor
+                  device_class: door
+                - domain: binary_sensor
+                  device_class: opening
+        preactivation_timeout:
+          name: Preactivation Confirmation Timeout
+          description: >-
+            How long an Occupancy Sensor has to confirm a preactivation. A
+            new preactivation transition during this window restarts it.
+          default: 10
+          selector:
+            number:
+              min: 1
+              max: 120
+              step: 1
+              unit_of_measurement: seconds
+        additional_retention_sensors:
+          name: Additional Retention Sensors
+          description: >-
+            Optional. Sensors that may keep an already-established occupancy
+            session from becoming vacant. They never turn lights on, never
+            establish occupancy, and never confirm preactivation.
+          default: []
+          selector:
+            entity:
+              multiple: true
+              filter:
+                - domain: binary_sensor
+                  device_class: motion
+                - domain: binary_sensor
+                  device_class: occupancy
+
+    activation_conditions_section:
+      name: "Advanced: Activation Conditions"
+      icon: mdi:filter-check-outline
+      collapsed: true
+      input:
+        activation_conditions:
+          name: Activation Conditions
+          description: >-
+            Optional. Every condition must be true for a new automatic
+            activation, whether by occupancy or by preactivation. They do not
+            affect occupancy, vacancy, turning lights off, or restoring
+            lighting extinguished by a racing shutdown.
+          default: []
+          selector:
+            condition: {}
+
+    alternate_lighting_section:
+      name: "Advanced: Alternate Lighting"
+      icon: mdi:weather-night
+      collapsed: true
+      input:
+        alternate_target:
+          name: Alternate Target
+          description: >-
+            Optional. Lights used instead of the Default Target when the
+            Alternate Target Conditions pass. The choice is made when automatic
+            activation begins and stays fixed for that occupancy session.
+          default: []
+          selector:
+            entity:
+              multiple: true
+              filter:
+                - domain: light
+        alternate_target_conditions:
+          name: Alternate Target Conditions
+          description: >-
+            Checked only after the Activation Gate (illuminance and Activation
+            Conditions) has already passed. Do not repeat the Activation
+            Conditions here. Standard Home Assistant semantics apply: if an
+            Alternate Target is set and this list is empty, the Alternate
+            Target is always selected.
+          default: []
+          selector:
+            condition: {}
+
+# One run represents one occupancy or provisional session. New triggers are
+# deliberately ignored while a session is running to preserve ownership and
+# target state. Waits and state rechecks handle new evidence, except a brief
+# occupancy pulse entirely within a blocking service call (see design Section 32).
+mode: single
+max_exceeded: silent
+
+triggers:
+  - trigger: state
+    id: occupancy
+    entity_id: !input occupancy_sensors
+    to: "on"
+  - trigger: state
+    id: preactivation
+    entity_id: !input preactivation_sensors
+    from: "off"
+    to: "on"
+
+variables:
+  occupancy_sensors_input: !input occupancy_sensors
+  retention_sensors_input: !input additional_retention_sensors
+  default_target_input: !input default_target
+  alternate_target_input: !input alternate_target
+  illuminance_sensors_input: !input illuminance_sensors
+  occupancy_sensors: >-
+    {{ [occupancy_sensors_input] if occupancy_sensors_input is string
+       else occupancy_sensors_input | list }}
+  retention_sensors: >-
+    {{ [retention_sensors_input] if retention_sensors_input is string
+       else retention_sensors_input | list }}
+  default_target: >-
+    {{ [default_target_input] if default_target_input is string
+       else default_target_input | list }}
+  alternate_target: >-
+    {{ [alternate_target_input] if alternate_target_input is string
+       else alternate_target_input | list }}
+  illuminance_sensors: >-
+    {{ [illuminance_sensors_input] if illuminance_sensors_input is string
+       else illuminance_sensors_input | list }}
+  illuminance_aggregation: !input illuminance_aggregation
+  illuminance_threshold: !input illuminance_threshold
+  vacancy_timeout: !input vacancy_timeout
+  preactivation_timeout: !input preactivation_timeout
+
+actions:
+  - variables:
+      # "provisional" (PROVISIONAL ACTIVATION) or "occupied"
+      # (CONFIRMED OCCUPANCY / POSSIBLY VACANT). VACANT means no run.
+      phase: "{{ 'provisional' if trigger.id == 'preactivation' else 'occupied' }}"
+      activation_requested: true
+      # Target selected for this session: "", "default" or "alternate".
+      selected: ""
+      # Lights this run switched from off to on (provisional ownership).
+      introduced: []
+      # Timestamp of the last processed activation request.
+      request_ts: 0
+      finished: false
+
+  - repeat:
+      until: "{{ finished }}"
+      sequence:
+        - variables:
+            lights_to_turn_off: []
+
+        # ------------------------------------------------------------------
+        # Common Activation Gate (occupancy and preactivation requests).
+        # ------------------------------------------------------------------
+        - if: "{{ activation_requested }}"
+          then:
+            - variables:
+                activation_requested: false
+                # Captured before evaluation: later occupancy transitions are
+                # new requests; earlier ones are covered by this evaluation.
+                request_ts: "{{ now().timestamp() }}"
+            - alias: "Activation Gate: OFF -> ON needed, illuminance, conditions"
+              if:
+                - alias: "Only for OFF -> ON (no target yet, or part of it is off)"
+                  condition: template
+                  value_template: >-
+                    {{ selected == ''
+                       or (alternate_target if selected == 'alternate' else default_target)
+                          | select('is_state', 'off') | list | count > 0 }}
+                - alias: "Illuminance permits activation"
+                  condition: template
+                  value_template: >-
+                    {%- set values = illuminance_sensors | map('states')
+                          | select('is_number') | map('float') | list -%}
+                    {%- if values | count == 0 -%}
+                      true
+                    {%- else -%}
+                      {%- if illuminance_aggregation == 'minimum' -%}
+                        {%- set effective = values | min -%}
+                      {%- elif illuminance_aggregation == 'maximum' -%}
+                        {%- set effective = values | max -%}
+                      {%- elif illuminance_aggregation == 'median' -%}
+                        {%- set effective = values | median -%}
+                      {%- else -%}
+                        {%- set effective = values | average -%}
+                      {%- endif -%}
+                      {{ effective < illuminance_threshold | float }}
+                    {%- endif -%}
+                - alias: "Activation Conditions pass"
+                  condition: and
+                  conditions: !input activation_conditions
+              then:
+                - alias: "Select target once per session"
+                  if: "{{ selected == '' }}"
+                  then:
+                    - if:
+                        - condition: template
+                          value_template: "{{ alternate_target | count > 0 }}"
+                        - alias: "Alternate Target Conditions pass"
+                          condition: and
+                          conditions: !input alternate_target_conditions
+                      then:
+                        - variables:
+                            selected: alternate
+                      else:
+                        - variables:
+                            selected: default
+                - variables:
+                    lights_to_turn_on: >-
+                      {{ (alternate_target if selected == 'alternate' else default_target)
+                         | select('is_state', 'off') | list }}
+                - if: "{{ lights_to_turn_on | count > 0 }}"
+                  then:
+                    - action: light.turn_on
+                      target:
+                        entity_id: "{{ lights_to_turn_on }}"
+                    - variables:
+                        introduced: "{{ (introduced + lights_to_turn_on) | unique | list }}"
+
+        - choose:
+            # ----------------------------------------------------------------
+            # PROVISIONAL ACTIVATION
+            # ----------------------------------------------------------------
+            - conditions: "{{ phase == 'provisional' }}"
+              sequence:
+                - if: "{{ introduced | count == 0 }}"
+                  then:
+                    # Activation was inhibited or nothing was off: there is no
+                    # provisional lighting to own, so end immediately and let
+                    # later occupancy events be evaluated independently.
+                    - variables:
+                        finished: true
+                  else:
+                    - variables:
+                        provisional_event: occupancy
+                    - if: "{{ occupancy_sensors | map('states') | select('eq', 'on') | list | count == 0 }}"
+                      then:
+                        - wait_for_trigger:
+                            - trigger: state
+                              id: occupancy
+                              entity_id: !input occupancy_sensors
+                              to: "on"
+                            - trigger: state
+                              id: preactivation
+                              entity_id: !input preactivation_sensors
+                              from: "off"
+                              to: "on"
+                          timeout:
+                            seconds: "{{ preactivation_timeout }}"
+                          continue_on_timeout: true
+                        - variables:
+                            provisional_event: "{{ 'timeout' if wait.trigger is none else wait.trigger.id }}"
+                    - choose:
+                        - alias: "Confirmed by an Occupancy Sensor (retention cannot confirm)"
+                          conditions: >-
+                            {{ provisional_event == 'occupancy'
+                               or occupancy_sensors | map('states') | select('eq', 'on') | list | count > 0 }}
+                          sequence:
+                            - variables:
+                                phase: occupied
+                                activation_requested: true
+                        - alias: "New preactivation transition restarts the window"
+                          conditions: "{{ provisional_event == 'preactivation' }}"
+                          sequence:
+                            - variables:
+                                activation_requested: true
+                      default:
+                        # Timeout and the recheck above found no Occupancy
+                        # Sensor on: withdraw only what this run turned on.
+                        - variables:
+                            lights_to_turn_off: "{{ introduced | select('is_state', 'on') | list }}"
+                            finished: true
+
+            # ----------------------------------------------------------------
+            # CONFIRMED OCCUPANCY / POSSIBLY VACANT
+            # ----------------------------------------------------------------
+            - conditions: "{{ phase == 'occupied' }}"
+              sequence:
+                - alias: "Wait for all sensors clear, or a new activation request"
+                  wait_template: &all_clear_or_request >-
+                    {%- set ns = namespace(clear=true, need=true, floor=request_ts | float(0)) -%}
+                    {%- for entity in occupancy_sensors + retention_sensors -%}
+                      {%- if states(entity) != 'off' -%}{%- set ns.clear = false -%}{%- endif -%}
+                    {%- endfor -%}
+                    {%- if selected != '' -%}
+                      {%- set off_lights = expand(alternate_target if selected == 'alternate' else default_target)
+                            | selectattr('state', 'eq', 'off') | list -%}
+                      {%- if off_lights | count == 0 -%}
+                        {%- set ns.need = false -%}
+                      {%- else -%}
+                        {%- set ns.floor = [ns.floor, off_lights | map(attribute='last_changed')
+                              | map('as_timestamp') | min] | max -%}
+                      {%- endif -%}
+                    {%- endif -%}
+                    {%- set request = ns.need and expand(occupancy_sensors)
+                          | selectattr('state', 'eq', 'on') | map(attribute='last_changed')
+                          | map('as_timestamp') | select('gt', ns.floor) | list | count > 0 -%}
+                    {{ ns.clear or request }}
+                - choose:
+                    - alias: "Possibly vacant: every sensor explicitly off"
+                      conditions: &all_clear >-
+                        {{ (occupancy_sensors + retention_sensors) | map('states')
+                           | reject('eq', 'off') | list | count == 0 }}
+                      sequence:
+                        - alias: "Vacancy timeout (cancelled by any non-off sensor)"
+                          wait_template: >-
+                            {{ (occupancy_sensors + retention_sensors) | map('states')
+                               | reject('eq', 'off') | list | count > 0 }}
+                          timeout:
+                            seconds: "{{ vacancy_timeout }}"
+                          continue_on_timeout: true
+                        - alias: "Recheck every sensor immediately before turning off"
+                          if:
+                            - "{{ not wait.completed }}"
+                            - *all_clear
+                          then:
+                            - variables:
+                                lights_to_turn_off: >-
+                                  {{ ((alternate_target if selected == 'alternate' else default_target)
+                                      if selected != '' else [])
+                                      | select('is_state', 'on') | list }}
+                                finished: true
+                  default:
+                    # Not all clear, so the shared wait template reduces to
+                    # its request part: an Occupancy Sensor turned on after the
+                    # last request while part of the session target is off (or
+                    # no target has been permitted yet).
+                    - if: *all_clear_or_request
+                      then:
+                        - variables:
+                            activation_requested: true
+
+        - alias: "Recheck before dispatch; restore if shutdown races with new evidence"
+          if: "{{ lights_to_turn_off | count > 0 }}"
+          then:
+            - if: &shutdown_cancelled >-
+                {{ occupancy_sensors | map('states') | select('eq', 'on') | list | count > 0
+                   if phase == 'provisional'
+                   else (occupancy_sensors + retention_sensors) | map('states')
+                        | reject('eq', 'off') | list | count > 0 }}
+              then:
+                - variables:
+                    finished: false
+                    phase: occupied
+                    activation_requested: "{{ occupancy_sensors | map('states') | select('eq', 'on') | list | count > 0 }}"
+              else:
+                - action: light.turn_off
+                  target:
+                    entity_id: "{{ lights_to_turn_off }}"
+                - if: *shutdown_cancelled
+                  then:
+                    # Compensation preserves this session, not a new activation.
+                    - action: light.turn_on
+                      target:
+                        entity_id: "{{ lights_to_turn_off }}"
+                    - variables:
+                        finished: false
+                        phase: occupied
+                        activation_requested: false
+                        request_ts: "{{ now().timestamp() }}"
+
+        # --------------------------------------------------------------------
+        # Triggers are ignored while this run is active. If an Occupancy Sensor
+        # turned on while the run was ending, preserve the current session.
+        # --------------------------------------------------------------------
+        - if:
+            - "{{ finished }}"
+            - "{{ occupancy_sensors | map('states') | select('eq', 'on') | list | count > 0 }}"
+          then:
+            - variables:
+                finished: false
+                phase: occupied
+                activation_requested: true
